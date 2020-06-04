@@ -11,10 +11,10 @@ from geomstats.learning._template import TransformerMixin
 from geomstats.learning.frechet_mean import FrechetMean
 
 
-EM_CONV_RATE = 1e-4
+EM_CONV_RATE = 1e-5
 MINIMUM_EPOCHS = 10
 DEFAULT_MAX_ITER = 100
-DEFAULT_LR = 5e-2
+DEFAULT_LR = 5e-3
 DEFAULT_CONV_FACTOR = 5e-3
 DEFAULT_TOL = 1e-2
 ZETA_LOWER_BOUND = 5e-2
