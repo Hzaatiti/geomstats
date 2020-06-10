@@ -125,7 +125,7 @@ def expectation_maximisation_poincare_ball():
                       initialisation_method='random',
                       mean_method='frechet-poincare-ball')
 
-    means, variances, mixture_coefficients = EM.fit(
+    means, variances, mixture_coefficients, _pp = EM.fit(
         data=data,
         max_iter=100)
 

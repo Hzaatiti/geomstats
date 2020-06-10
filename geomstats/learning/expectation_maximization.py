@@ -14,8 +14,8 @@ from geomstats.learning.frechet_mean import FrechetMean
 EM_CONV_RATE = 1e-5
 MINIMUM_EPOCHS = 10
 DEFAULT_MAX_ITER = 100
-DEFAULT_LR = 5e-3
-DEFAULT_CONV_FACTOR = 5e-3
+DEFAULT_MEAN_LR = 5e-2
+DEFAULT_MEAN_CONV_FACTOR = 5e-3
 DEFAULT_TOL = 1e-2
 ZETA_LOWER_BOUND = 5e-2
 ZETA_UPPER_BOUND = 2.
@@ -264,8 +264,12 @@ class RiemannianEM(TransformerMixin, ClusterMixin, BaseEstimator):
     def fit(self,
             data,
             max_iter=DEFAULT_MAX_ITER,
-            lr_mean=DEFAULT_LR,
-            conv_factor_mean=DEFAULT_CONV_FACTOR):
+            lr_mean=DEFAULT_MEAN_LR,
+            conv_factor_mean=DEFAULT_MEAN_CONV_FACTOR,
+            mixture_coefficients=None,
+            means=None,
+            variances=None,
+            posterior_probabilities_input=None):
         """Fit a Gaussian mixture model (GMM) given the data.
 
         Alternates between Expectation and Maximization steps
@@ -293,14 +297,30 @@ class RiemannianEM(TransformerMixin, ClusterMixin, BaseEstimator):
             Gaussian mixture model: means, variances and mixture_coefficients.
         """
         self._dimension = data.shape[-1]
-        self.means = (gs.random.rand(
-            self.n_gaussians,
-            self._dimension) - 0.5) / self._dimension
-        self.variances = gs.random.rand(self.n_gaussians) / 10 + 0.8
-        self.mixture_coefficients = \
-            gs.ones(self.n_gaussians) / self.n_gaussians
-        posterior_probabilities = gs.ones((data.shape[0],
-                                           self.means.shape[0]))
+
+        if means is None:
+            self.means = (gs.random.rand(
+                self.n_gaussians,
+                self._dimension) - 0.5) / self._dimension
+        else:
+            self.means = means
+
+        if variances is None:
+            self.variances = gs.random.rand(self.n_gaussians) / 10 + 0.8
+        else:
+            self.variances = variances
+
+        if mixture_coefficients is None:
+            self.mixture_coefficients = \
+                gs.ones(self.n_gaussians) / self.n_gaussians
+        else:
+            self.mixture_coefficients = mixture_coefficients
+
+        if posterior_probabilities_input is None:
+            posterior_probabilities = gs.ones((data.shape[0],
+                                               self.means.shape[0]))
+        else:
+            posterior_probabilities = posterior_probabilities_input
 
         self.variances_range,\
             self.normalization_factor_var, \
@@ -319,7 +339,7 @@ class RiemannianEM(TransformerMixin, ClusterMixin, BaseEstimator):
 
             if(condition < EM_CONV_RATE and epoch > MINIMUM_EPOCHS):
                 logging.info('EM converged in %s iterations', epoch)
-                return self.means, self.variances, self.mixture_coefficients
+                return self.means, self.variances, self.mixture_coefficients, posterior_probabilities
 
             self._maximization(data,
                                posterior_probabilities,
@@ -329,4 +349,4 @@ class RiemannianEM(TransformerMixin, ClusterMixin, BaseEstimator):
         logging.info('WARNING: EM did not converge \n'
                      'Please increase MINIMUM_EPOCHS.')
 
-        return self.means, self.variances, self.mixture_coefficients
+        return self.means, self.variances, self.mixture_coefficients, posterior_probabilities
