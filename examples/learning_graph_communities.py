@@ -212,7 +212,7 @@ def main():
     """
     gs.random.seed(1234)
     dim = 2
-    max_epochs = 500
+    max_epochs = 20
     lr = .05
     n_negative = 2
     context_size = 1
@@ -292,26 +292,26 @@ def main():
             c=colors[karate_graph.labels[i_embedding][0]])
     plt.show()
 
-    # em = RiemannianEM(
-    #     n_gaussians=2,
-    #     riemannian_metric=hyperbolic_manifold.metric,
-    #     initialisation_method='random',
-    #     mean_method='frechet-poincare-ball',
-    # )
-    #
-    # means, variances, mixture_coefficients = em.fit(
-    #     data=embeddings,
-    #     max_iter=100)
-    #
-    # plot = plot_gaussian_mixture_distribution(embeddings,
-    #                                           mixture_coefficients,
-    #                                           means,
-    #                                           variances,
-    #                                           plot_precision=100,
-    #                                           save_path='result.png',
-    #                                           metric=hyperbolic_manifold.metric)
-    #
-    # plot.show()
+    em = RiemannianEM(
+        n_gaussians=2,
+        riemannian_metric=hyperbolic_manifold.metric,
+        initialisation_method='random',
+        mean_method='frechet-poincare-ball',
+    )
+
+    means, variances, mixture_coefficients, posterior_probs = em.fit(
+        data=embeddings,
+        max_iter=100)
+
+    plot = plot_gaussian_mixture_distribution(embeddings,
+                                              mixture_coefficients,
+                                              means,
+                                              variances,
+                                              plot_precision=100,
+                                              save_path='result.png',
+                                              metric=hyperbolic_manifold.metric)
+
+    plot.show()
 
 if __name__ == '__main__':
     main()
