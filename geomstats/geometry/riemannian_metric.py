@@ -1,12 +1,10 @@
 """Riemannian and pseudo-Riemannian metrics."""
 
-import math
-
 import autograd
 
 import geomstats.backend as gs
+import geomstats.vectorization
 from geomstats.geometry.connection import Connection
-
 
 EPSILON = 1e-4
 N_CENTERS = 10
@@ -25,51 +23,91 @@ def loss(y_pred, y_true, metric):
 
     Parameters
     ----------
-    y_pred
-    y_true
-    metric
+    y_pred : array-like, shape=[..., dim]
+        Prediction.
+    y_true : array-like, shape=[..., dim]
+        Ground-truth.
+    metric : RiemannianMetric
+        Metric.
 
     Returns
     -------
-    loss
-
+    sq_dist : array-like, shape=[...,]
+        Loss, i.e. the squared distance.
     """
-    loss = metric.squared_dist(y_pred, y_true)
-    return loss
+    sq_dist = metric.squared_dist(y_pred, y_true)
+    return sq_dist
 
 
 def grad(y_pred, y_true, metric):
-    """Closed-form for the gradient of the loss function."""
+    """Closed-form for the gradient of the loss function.
+
+    Parameters
+    ----------
+    y_pred : array-like, shape=[..., dim]
+        Prediction.
+    y_true : array-like, shape=[..., dim]
+        Ground-truth.
+    metric : RiemannianMetric
+        Metric.
+
+    Returns
+    -------
+    loss_grad : array-like, shape=[...,]
+        Gradient of the loss.
+
+    """
     tangent_vec = metric.log(base_point=y_pred, point=y_true)
     grad_vec = - 2. * tangent_vec
 
-    inner_prod_mat = metric.inner_product_matrix(base_point=y_pred)
+    inner_prod_mat = metric.metric_matrix(base_point=y_pred)
+    is_vectorized = inner_prod_mat.ndim == 3
+    axes = (0, 2, 1) if is_vectorized else (1, 0)
 
-    grad = gs.einsum('ni,nij->ni',
-                     grad_vec,
-                     gs.transpose(inner_prod_mat, axes=(0, 2, 1)))
+    loss_grad = gs.einsum(
+        '...i,...ij->...i',
+        grad_vec,
+        gs.transpose(inner_prod_mat, axes=axes))
 
-    return grad
+    return loss_grad
 
 
 class RiemannianMetric(Connection):
-    """Class for Riemannian and pseudo-Riemannian metrics."""
+    """Class for Riemannian and pseudo-Riemannian metrics.
 
-    def __init__(self, dimension, signature=None):
-        assert isinstance(dimension, int) or dimension == math.inf
-        assert dimension > 0
-        super().__init__(dimension=dimension)
+    Parameters
+    ----------
+    dim : int
+        Dimension of the manifold.
+    signature : tuple
+        Signature of the metric.
+        Optional, default: None.
+    default_point_type : str, {'vector', 'matrix'}
+        Point type.
+        Optional, default: 'vector'.
+    """
+
+    def __init__(self, dim, signature=None, default_point_type='vector'):
+        super(RiemannianMetric, self).__init__(
+            dim=dim, default_point_type=default_point_type)
         self.signature = signature
 
-    def inner_product_matrix(self, base_point=None):
-        """Inner product matrix at the tangent space at a base point.
+    def metric_matrix(self, base_point=None):
+        """Metric matrix at the tangent space at a base point.
 
         Parameters
         ----------
-        base_point : array-like, shape=[n_samples, dimension], optional
+        base_point : array-like, shape=[..., dim]
+            Base point.
+            Optional, default: None.
+
+        Returns
+        -------
+        mat : array-like, shape=[..., dim, dim]
+            Inner-product matrix.
         """
         raise NotImplementedError(
-            'The computation of the inner product matrix'
+            'The computation of the metric matrix'
             ' is not implemented.')
 
     def inner_product_inverse_matrix(self, base_point=None):
@@ -77,9 +115,16 @@ class RiemannianMetric(Connection):
 
         Parameters
         ----------
-        base_point : array-like, shape=[n_samples, dimension], optional
+        base_point : array-like, shape=[..., dim]
+            Base point.
+            Optional, default: None.
+
+        Returns
+        -------
+        mat : array-like, shape=[..., dim, dim]
+            Inverse of inner-product matrix.
         """
-        metric_matrix = self.inner_product_matrix(base_point)
+        metric_matrix = self.metric_matrix(base_point)
         cometric_matrix = gs.linalg.inv(metric_matrix)
         return cometric_matrix
 
@@ -88,9 +133,16 @@ class RiemannianMetric(Connection):
 
         Parameters
         ----------
-        base_point : array-like, shape=[n_samples, dimension], optional
+        base_point : array-like, shape=[..., dim]
+            Base point.
+            Optional, default: None.
+
+        Returns
+        -------
+        mat : array-like, shape=[..., dim, dim]
+            Derivative of inverse of inner-product matrix.
         """
-        metric_derivative = autograd.jacobian(self.inner_product_matrix)
+        metric_derivative = autograd.jacobian(self.metric_matrix)
         return metric_derivative(base_point)
 
     def christoffels(self, base_point):
@@ -98,87 +150,58 @@ class RiemannianMetric(Connection):
 
         Parameters
         ----------
-        base_point: array-like, shape=[n_samples, dimension]
+        base_point: array-like, shape=[..., dim]
+            Base point.
 
         Returns
         -------
-        christoffels: array-like,
-                             shape=[n_samples, dimension, dimension, dimension]
+        christoffels: array-like, shape=[..., dim, dim, dim]
+            Christoffel symbols.
         """
         cometric_mat_at_point = self.inner_product_inverse_matrix(base_point)
         metric_derivative_at_point = self.inner_product_derivative_matrix(
             base_point)
-        term_1 = gs.einsum('nim,nmkl->nikl',
+        term_1 = gs.einsum('...im,...mkl->...ikl',
                            cometric_mat_at_point,
                            metric_derivative_at_point)
-        term_2 = gs.einsum('nim,nmlk->nilk',
+        term_2 = gs.einsum('...im,...mlk->...ilk',
                            cometric_mat_at_point,
                            metric_derivative_at_point)
-        term_3 = - gs.einsum('nim,nklm->nikl',
+        term_3 = - gs.einsum('...im,...klm->...ikl',
                              cometric_mat_at_point,
                              metric_derivative_at_point)
 
         christoffels = 0.5 * (term_1 + term_2 + term_3)
         return christoffels
 
+    @geomstats.vectorization.decorator(['else', 'vector', 'vector', 'vector'])
     def inner_product(self, tangent_vec_a, tangent_vec_b, base_point=None):
         """Inner product between two tangent vectors at a base point.
 
         Parameters
         ----------
-        tangent_vec_a: array-like, shape=[n_samples, dimension]
-                                   or shape=[1, dimension]
-
-        tangent_vec_b: array-like, shape=[n_samples, dimension]
-                                   or shape=[1, dimension]
-
-        base_point: array-like, shape=[n_samples, dimension]
-                                or shape=[1, dimension]
+        tangent_vec_a: array-like, shape=[..., dim]
+            Tangent vector at base point.
+        tangent_vec_b: array-like, shape=[..., dim]
+            Tangent vector at base point.
+        base_point: array-like, shape=[..., dim]
+            Base point.
+            Optional, default: None.
 
         Returns
         -------
-        inner_product : array-like, shape=[n_samples,]
+        inner_product : array-like, shape=[...,]
+            Inner-product.
         """
-        tangent_vec_a = gs.to_ndarray(tangent_vec_a, to_ndim=2)
-        tangent_vec_b = gs.to_ndarray(tangent_vec_b, to_ndim=2)
-        n_tangent_vec_a = gs.shape(tangent_vec_a)[0]
-        n_tangent_vec_b = gs.shape(tangent_vec_b)[0]
-
-        inner_prod_mat = self.inner_product_matrix(base_point)
+        inner_prod_mat = self.metric_matrix(base_point)
         inner_prod_mat = gs.to_ndarray(inner_prod_mat, to_ndim=3)
-        n_mats = gs.shape(inner_prod_mat)[0]
 
-        if n_tangent_vec_a != n_mats:
-            if n_tangent_vec_a == 1:
-                tangent_vec_a = gs.squeeze(tangent_vec_a, axis=0)
-                einsum_str_a = 'j,njk->nk'
-            elif n_mats == 1:
-                inner_prod_mat = gs.squeeze(inner_prod_mat, axis=0)
-                einsum_str_a = 'nj,jk->nk'
-            else:
-                raise ValueError('Shape mismatch for einsum.')
-        else:
-            einsum_str_a = 'nj,njk->nk'
+        aux = gs.einsum('...j,...jk->...k', tangent_vec_a, inner_prod_mat)
 
-        aux = gs.einsum(einsum_str_a, tangent_vec_a, inner_prod_mat)
-        n_auxs, _ = gs.shape(aux)
-
-        if n_tangent_vec_b != n_auxs:
-            if n_auxs == 1:
-                aux = gs.squeeze(aux, axis=0)
-                einsum_str_b = 'k,nk->n'
-            elif n_tangent_vec_b == 1:
-                tangent_vec_b = gs.squeeze(tangent_vec_b, axis=0)
-                einsum_str_b = 'nk,k->n'
-            else:
-                raise ValueError('Shape mismatch for einsum.')
-        else:
-            einsum_str_b = 'nk,nk->n'
-
-        inner_prod = gs.einsum(einsum_str_b, aux, tangent_vec_b)
+        inner_prod = gs.einsum('...k,...k->...', aux, tangent_vec_b)
+        inner_prod = gs.to_ndarray(inner_prod, to_ndim=1)
         inner_prod = gs.to_ndarray(inner_prod, to_ndim=2, axis=1)
 
-        assert gs.ndim(inner_prod) == 2, inner_prod.shape
         return inner_prod
 
     def squared_norm(self, vector, base_point=None):
@@ -189,12 +212,16 @@ class RiemannianMetric(Connection):
 
         Parameters
         ----------
-        vector : array-like, shape=[n_samples, dimension]
-        base_point : array-like, shape=[n_samples, dimension]
+        vector : array-like, shape=[..., dim]
+            Vector.
+        base_point : array-like, shape=[..., dim]
+            Base point.
+            Optional, default: None.
 
         Returns
         -------
-        sq_norm : array-like, shape=[n_samples,]
+        sq_norm : array-like, shape=[...,]
+            Squared norm.
         """
         sq_norm = self.inner_product(vector, vector, base_point)
         return sq_norm
@@ -210,113 +237,39 @@ class RiemannianMetric(Connection):
 
         Parameters
         ----------
-        vector : array-like, shape=[n_samples, dimension]
-        base_point : array-like, shape=[n_samples, dimension]
+        vector : array-like, shape=[..., dim]
+            Vector.
+        base_point : array-like, shape=[..., dim]
+            Base point.
+            Optional, default: None.
 
         Returns
         -------
-        norm : array-like, shape=[n_samples,]
+        norm : array-like, shape=[...,]
+            Norm.
         """
         sq_norm = self.squared_norm(vector, base_point)
         norm = gs.sqrt(sq_norm)
         return norm
-
-    def geodesic(self, initial_point,
-                 end_point=None, initial_tangent_vec=None,
-                 point_type='vector'):
-        """Geodesic as function of t.
-
-        Geodesic curve defined by either:
-        - an initial point and an initial tangent vector, or
-        - an initial point and an end point.
-
-        The geodesic is returned as a function parameterized by t.
-
-        Parameters
-        ----------
-        initial_point : array-like, shape=[n_samples, dimension]
-        end_point : array-like, shape=[n_samples, dimension], optional
-        initial_tangent_vec : array-like, shape=[n_samples, dimension],
-            optional
-        point_type : str, optional
-
-        Returns
-        -------
-        path : callable
-        """
-        point_ndim = 1
-        if point_type == 'matrix':
-            point_ndim = 2
-
-        initial_point = gs.to_ndarray(initial_point,
-                                      to_ndim=point_ndim + 1)
-
-        if end_point is None and initial_tangent_vec is None:
-            raise ValueError('Specify an end point or an initial tangent '
-                             'vector to define the geodesic.')
-        if end_point is not None:
-            end_point = gs.to_ndarray(end_point,
-                                      to_ndim=point_ndim + 1)
-            shooting_tangent_vec = self.log(point=end_point,
-                                            base_point=initial_point)
-            if initial_tangent_vec is not None:
-                assert gs.allclose(shooting_tangent_vec, initial_tangent_vec)
-            initial_tangent_vec = shooting_tangent_vec
-        initial_tangent_vec = gs.array(initial_tangent_vec)
-        initial_tangent_vec = gs.to_ndarray(initial_tangent_vec,
-                                            to_ndim=point_ndim + 1)
-
-        def path(t):
-            """Generate a function parameterizing the geodesic.
-
-            Parameters
-            ----------
-            t :  parameter value of the geodesic
-
-            Returns
-            -------
-            point_at_time_t : callable
-            """
-            t = gs.cast(t, gs.float32)
-            t = gs.to_ndarray(t, to_ndim=1)
-            t = gs.to_ndarray(t, to_ndim=2, axis=1)
-            new_initial_point = gs.to_ndarray(
-                initial_point,
-                to_ndim=point_ndim + 1)
-            new_initial_tangent_vec = gs.to_ndarray(
-                initial_tangent_vec,
-                to_ndim=point_ndim + 1)
-
-            if point_type == 'vector':
-                tangent_vecs = gs.einsum('il,nk->ik',
-                                         t,
-                                         new_initial_tangent_vec)
-            elif point_type == 'matrix':
-                tangent_vecs = gs.einsum('il,nkm->ikm',
-                                         t,
-                                         new_initial_tangent_vec)
-
-            point_at_time_t = self.exp(tangent_vec=tangent_vecs,
-                                       base_point=new_initial_point)
-            return point_at_time_t
-
-        return path
 
     def squared_dist(self, point_a, point_b):
         """Squared geodesic distance between two points.
 
         Parameters
         ----------
-        point_a : array-like, shape=[n_samples, dimension]
-        point_b : array-like, shape=[n_samples, dimension]
+        point_a : array-like, shape=[..., dim]
+            Point.
+        point_b : array-like, shape=[..., dim]
+            Point.
 
         Returns
         -------
-        sq_dist : array-like, shape=[n_samples,]
+        sq_dist : array-like, shape=[...,]
+            Squared distance.
         """
         log = self.log(point=point_b, base_point=point_a)
-        sq_dist = self.squared_norm(vector=log, base_point=point_a)
 
+        sq_dist = self.squared_norm(vector=log, base_point=point_a)
         return sq_dist
 
     def dist(self, point_a, point_b):
@@ -327,16 +280,43 @@ class RiemannianMetric(Connection):
 
         Parameters
         ----------
-        point_a : array-like, shape=[n_samples, dimension]
-        point_b : array-like, shape=[n_samples, dimension]
+        point_a : array-like, shape=[..., dim]
+            Point.
+        point_b : array-like, shape=[..., dim]
+            Point.
 
         Returns
         -------
-        dist : array-like, shape=[n_samples,]
+        dist : array-like, shape=[...,]
+            Distance.
         """
         sq_dist = self.squared_dist(point_a, point_b)
         dist = gs.sqrt(sq_dist)
         return dist
+
+    def dist_pairwise(self, point):
+        """Compute the pairwise distance between points.
+
+        Parameters
+        ----------
+        point : array-like, shape=[n_samples, dim]
+            Set of points in hyperbolic space.
+
+        Returns
+        -------
+        dist : array-like, shape=[n_samples, n_samples]
+            Pairwise distance matrix between all points.
+        """
+        pairwise_dist = []
+
+        for i, x in enumerate(point):
+            for y in point[i:]:
+                pairwise_dist.append(self.dist(x, y))
+
+        pairwise_dist = geomstats.geometry.symmetric_matrices.\
+            SymmetricMatrices.from_vector(gs.array(pairwise_dist))
+
+        return pairwise_dist
 
     def diameter(self, points):
         """Give the distance between two farthest points.
@@ -346,12 +326,13 @@ class RiemannianMetric(Connection):
 
         Parameters
         ----------
-        points
+        points : array-like, shape=[..., dim]
+            Points.
 
         Returns
         -------
-        diameter
-
+        diameter : float
+            Distance between two farthest points.
         """
         diameter = 0.0
         n_points = points.shape[0]
@@ -368,12 +349,15 @@ class RiemannianMetric(Connection):
 
         Parameters
         ----------
-        point
-        neighbors
+        point : array-like, shape=[..., dim]
+            Point.
+        neighbors : array-like, shape=[..., dim]
+            Neighbors.
+
         Returns
         -------
-        closest_neighbor_index
-
+        closest_neighbor_index : int
+            Index of closest neighbor.
         """
         dist = self.dist(point, neighbors)
         closest_neighbor_index = gs.argmin(dist)
